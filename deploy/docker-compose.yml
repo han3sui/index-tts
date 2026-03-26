@@ -16,9 +16,7 @@ services:
       - MODEL_DIR=/app/checkpoints
       - PORT=8300
     volumes:
-      - ../checkpoints:/app/checkpoints
-      - index-tts-prompts:/app/prompts
-      - index-tts-outputs:/app/outputs
+      - ../checkpoints:/app/checkpoints:ro
     deploy:
       resources:
         reservations:
@@ -26,7 +24,3 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-
-volumes:
-  index-tts-prompts:
-  index-tts-outputs:

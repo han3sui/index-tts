@@ -1,5 +1,4 @@
 ARG CUDA_VERSION=12.8
-ARG TORCH_VERSION=2.8.0
 FROM nvidia/cuda:${CUDA_VERSION}.0-cudnn-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -15,11 +14,7 @@ RUN python3 -m pip install --upgrade pip
 WORKDIR /app
 COPY . /app
 
-RUN pip install ".[webui]" fastapi uvicorn python-multipart soundfile
-
-VOLUME /app/checkpoints
-VOLUME /app/prompts
-VOLUME /app/outputs
+RUN pip install . fastapi uvicorn python-multipart soundfile
 
 ENV MODEL_DIR=/app/checkpoints \
     API_KEY="" \
