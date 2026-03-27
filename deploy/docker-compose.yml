@@ -10,13 +10,10 @@ services:
       - "8300:8300"
     environment:
       - API_KEY=${API_KEY:-your-secret-key-here}
-      - USE_FP16=${USE_FP16:-false}
+      - USE_FP16=${USE_FP16:-true}
       - USE_DEEPSPEED=${USE_DEEPSPEED:-false}
       - USE_CUDA_KERNEL=${USE_CUDA_KERNEL:-false}
-      - MODEL_DIR=/app/checkpoints
       - PORT=8300
-    volumes:
-      - ../checkpoints:/app/checkpoints:ro
     deploy:
       resources:
         reservations:
