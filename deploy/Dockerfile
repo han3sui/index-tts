@@ -1,5 +1,4 @@
-ARG CUDA_VERSION=12.8
-FROM nvidia/cuda:${CUDA_VERSION}.0-cudnn-runtime-ubuntu22.04
+FROM nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -15,12 +14,16 @@ RUN python3 -m pip install --upgrade pip
 WORKDIR /app
 COPY . /app
 
+# 先装 CUDA 版 PyTorch（pip install . 不会读 uv 的源配置，默认装 CPU 版）
+RUN pip install torch==2.8.* torchaudio==2.8.* --index-url https://download.pytorch.org/whl/cu121
+
+# 再装项目本身和 API 依赖（PyTorch 已装好，pip 会跳过）
 RUN pip install . fastapi uvicorn python-multipart soundfile "huggingface_hub[cli,hf_xet]"
 
-# ===== 下载 IndexTTS2 主模型 (checkpoints/) =====
+# ===== 下载 IndexTTS2 主模型 =====
 RUN huggingface-cli download IndexTeam/IndexTTS-2 --local-dir /app/checkpoints
 
-# ===== 预下载 HuggingFace 运行时依赖模型（避免冷启动下载） =====
+# ===== 预下载 HuggingFace 运行时依赖模型 =====
 RUN python3 -c "\
 from transformers import SeamlessM4TFeatureExtractor; \
 SeamlessM4TFeatureExtractor.from_pretrained('facebook/w2v-bert-2.0'); \
