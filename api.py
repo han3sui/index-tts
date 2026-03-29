@@ -39,12 +39,15 @@ tts_v2 = IndexTTS2(
 async def synthesize(
     audio: UploadFile = File(..., description="参考音频文件"),
     text: str = Form(..., description="要合成的文本"),
-    emo_text: Optional[str] = Form(None, description="情绪描述文本"),
+    emo_text: Optional[str] = Form(None, description="情绪描述文本（与 use_emo_text 配合使用）"),
     emo_vector: Optional[str] = Form(None, description="情绪向量 JSON, 如 [0.8,0,0,0,0,0,0,0]"),
+    emo_alpha: Optional[float] = Form(None, description="情感强度 0.0-1.0，默认 0.6"),
+    use_emo_text: Optional[bool] = Form(None, description="根据文本自动推断情感；若同时提供 emo_text 则用该文本推断"),
 ):
     """
     无状态合成接口：参考音频随请求发送，不在服务端持久化。
-    返回合成后的 WAV 音频流。
+
+    情感控制优先级：emo_vector > emo_text/use_emo_text > 无情感（纯克隆）
     """
     tmp_file = None
     try:
@@ -53,6 +56,8 @@ async def synthesize(
         tmp_file = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
         tmp_file.write(audio_bytes)
         tmp_file.close()
+
+        alpha = emo_alpha if emo_alpha is not None else 0.6
 
         vec = None
         if emo_vector:
@@ -66,9 +71,20 @@ async def synthesize(
                 text=text,
                 output_path='',
                 emo_vector=vec,
-                emo_alpha=0.6,
+                emo_alpha=alpha,
                 use_emo_text=False,
             )
+        elif use_emo_text:
+            kwargs = dict(
+                spk_audio_prompt=tmp_file.name,
+                text=text,
+                output_path='',
+                use_emo_text=True,
+                emo_alpha=alpha,
+            )
+            if emo_text:
+                kwargs["emo_text"] = emo_text
+            sr, wav_np = tts_v2.infer(**kwargs)
         elif emo_text:
             sr, wav_np = tts_v2.infer(
                 spk_audio_prompt=tmp_file.name,
@@ -76,7 +92,7 @@ async def synthesize(
                 output_path='',
                 emo_text=emo_text,
                 use_emo_text=True,
-                emo_alpha=0.6,
+                emo_alpha=alpha,
             )
         else:
             sr, wav_np = tts_v2.infer(
