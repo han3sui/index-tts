@@ -123,6 +123,19 @@ async def synthesize(
             os.unlink(tmp_file.name)
 
 
+def _read_file_int(path: str) -> Optional[int]:
+    try:
+        with open(path, "r") as f:
+            val = f.read().strip()
+            return int(val) if val else None
+    except Exception:
+        return None
+
+
+def _is_in_container() -> bool:
+    return os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv")
+
+
 def _get_cpu_model() -> str:
     try:
         if platform.system() == "Linux":
@@ -142,49 +155,119 @@ def _get_cpu_model() -> str:
     return platform.processor() or "Unknown"
 
 
-@app.get("/status")
-async def status():
-    cpu_percent = psutil.cpu_percent(interval=0.5)
-    mem = psutil.virtual_memory()
-
-    gpu_info = None
-    if torch.cuda.is_available():
-        dev = torch.cuda.current_device()
-        total = torch.cuda.get_device_properties(dev).total_memory
-        allocated = torch.cuda.memory_allocated(dev)
-        reserved = torch.cuda.memory_reserved(dev)
-
+def _get_cgroup_cpu_count() -> Optional[float]:
+    """通过 cgroup 获取容器实际分配的 CPU 核心数"""
+    # cgroup v2
+    quota = _read_file_int("/sys/fs/cgroup/cpu.max")
+    if quota is None:
         try:
-            from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetUtilizationRates, nvmlShutdown
-            nvmlInit()
-            handle = nvmlDeviceGetHandleByIndex(dev)
-            util = nvmlDeviceGetUtilizationRates(handle)
-            gpu_util = util.gpu
-            nvmlShutdown()
+            with open("/sys/fs/cgroup/cpu.max", "r") as f:
+                parts = f.read().strip().split()
+                if parts[0] != "max" and len(parts) == 2:
+                    return int(parts[0]) / int(parts[1])
         except Exception:
-            gpu_util = None
+            pass
+    # cgroup v1
+    cfs_quota = _read_file_int("/sys/fs/cgroup/cpu/cpu.cfs_quota_us")
+    cfs_period = _read_file_int("/sys/fs/cgroup/cpu/cpu.cfs_period_us")
+    if cfs_quota and cfs_quota > 0 and cfs_period and cfs_period > 0:
+        return cfs_quota / cfs_period
+    return None
 
-        gpu_info = {
-            "name": torch.cuda.get_device_name(dev),
-            "gpu_utilization": gpu_util,
-            "memory_total_mb": round(total / 1024 / 1024),
-            "memory_allocated_mb": round(allocated / 1024 / 1024),
-            "memory_reserved_mb": round(reserved / 1024 / 1024),
-        }
+
+def _get_cgroup_memory() -> Optional[dict]:
+    """通过 cgroup 获取容器实际的内存限制和使用量"""
+    # cgroup v2
+    limit = _read_file_int("/sys/fs/cgroup/memory.max")
+    usage = _read_file_int("/sys/fs/cgroup/memory.current")
+    if limit and usage is not None:
+        if limit > psutil.virtual_memory().total:
+            return None
+        return {"total": limit, "used": usage}
+
+    # cgroup v1
+    limit = _read_file_int("/sys/fs/cgroup/memory/memory.limit_in_bytes")
+    usage = _read_file_int("/sys/fs/cgroup/memory/memory.usage_in_bytes")
+    if limit and usage is not None:
+        if limit > psutil.virtual_memory().total:
+            return None
+        return {"total": limit, "used": usage}
+
+    return None
+
+
+def _get_cpu_info() -> dict:
+    cpu_percent = psutil.cpu_percent(interval=0.5)
+    physical = psutil.cpu_count(logical=False)
+    logical = psutil.cpu_count(logical=True)
+
+    cgroup_cores = _get_cgroup_cpu_count() if _is_in_container() else None
+    if cgroup_cores:
+        logical = round(cgroup_cores)
+        physical = logical
 
     return {
-        "cpu": {
-            "name": _get_cpu_model(),
-            "percent": cpu_percent,
-            "count_physical": psutil.cpu_count(logical=False),
-            "count_logical": psutil.cpu_count(logical=True),
-        },
-        "memory": {
-            "total_mb": round(mem.total / 1024 / 1024),
-            "used_mb": round(mem.used / 1024 / 1024),
-            "percent": mem.percent,
-        },
-        "gpu": gpu_info,
+        "name": _get_cpu_model(),
+        "percent": cpu_percent,
+        "count_physical": physical,
+        "count_logical": logical,
+    }
+
+
+def _get_memory_info() -> dict:
+    cg_mem = _get_cgroup_memory() if _is_in_container() else None
+    if cg_mem:
+        total = cg_mem["total"]
+        used = cg_mem["used"]
+        percent = round(used / total * 100, 1) if total > 0 else 0
+        return {
+            "total_mb": round(total / 1024 / 1024),
+            "used_mb": round(used / 1024 / 1024),
+            "percent": percent,
+        }
+
+    mem = psutil.virtual_memory()
+    return {
+        "total_mb": round(mem.total / 1024 / 1024),
+        "used_mb": round(mem.used / 1024 / 1024),
+        "percent": mem.percent,
+    }
+
+
+def _get_gpu_info() -> Optional[dict]:
+    if not torch.cuda.is_available():
+        return None
+
+    dev = torch.cuda.current_device()
+    total = torch.cuda.get_device_properties(dev).total_memory
+    allocated = torch.cuda.memory_allocated(dev)
+    reserved = torch.cuda.memory_reserved(dev)
+
+    try:
+        from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetUtilizationRates, nvmlShutdown
+        nvmlInit()
+        handle = nvmlDeviceGetHandleByIndex(dev)
+        util = nvmlDeviceGetUtilizationRates(handle)
+        gpu_util = util.gpu
+        nvmlShutdown()
+    except Exception:
+        gpu_util = None
+
+    return {
+        "name": torch.cuda.get_device_name(dev),
+        "gpu_utilization": gpu_util,
+        "memory_total_mb": round(total / 1024 / 1024),
+        "memory_allocated_mb": round(allocated / 1024 / 1024),
+        "memory_reserved_mb": round(reserved / 1024 / 1024),
+    }
+
+
+@app.get("/status")
+async def status():
+    return {
+        "cpu": _get_cpu_info(),
+        "memory": _get_memory_info(),
+        "gpu": _get_gpu_info(),
     }
 
 
