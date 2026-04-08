@@ -3,6 +3,9 @@ import os
 import json
 import tempfile
 import soundfile as sf
+import platform
+import psutil
+import torch
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends
 from fastapi.responses import JSONResponse, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -120,6 +123,71 @@ async def synthesize(
             os.unlink(tmp_file.name)
 
 
+def _get_cpu_model() -> str:
+    try:
+        if platform.system() == "Linux":
+            with open("/proc/cpuinfo", "r") as f:
+                for line in f:
+                    if line.startswith("model name"):
+                        return line.split(":", 1)[1].strip()
+        elif platform.system() == "Windows":
+            import winreg
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                 r"HARDWARE\DESCRIPTION\System\CentralProcessor\0")
+            name, _ = winreg.QueryValueEx(key, "ProcessorNameString")
+            winreg.CloseKey(key)
+            return name.strip()
+    except Exception:
+        pass
+    return platform.processor() or "Unknown"
+
+
+@app.get("/status")
+async def status():
+    cpu_percent = psutil.cpu_percent(interval=0.5)
+    mem = psutil.virtual_memory()
+
+    gpu_info = None
+    if torch.cuda.is_available():
+        dev = torch.cuda.current_device()
+        total = torch.cuda.get_device_properties(dev).total_mem
+        allocated = torch.cuda.memory_allocated(dev)
+        reserved = torch.cuda.memory_reserved(dev)
+
+        try:
+            from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetUtilizationRates, nvmlShutdown
+            nvmlInit()
+            handle = nvmlDeviceGetHandleByIndex(dev)
+            util = nvmlDeviceGetUtilizationRates(handle)
+            gpu_util = util.gpu
+            nvmlShutdown()
+        except Exception:
+            gpu_util = None
+
+        gpu_info = {
+            "name": torch.cuda.get_device_name(dev),
+            "gpu_utilization": gpu_util,
+            "memory_total_mb": round(total / 1024 / 1024),
+            "memory_allocated_mb": round(allocated / 1024 / 1024),
+            "memory_reserved_mb": round(reserved / 1024 / 1024),
+        }
+
+    return {
+        "cpu": {
+            "name": _get_cpu_model(),
+            "percent": cpu_percent,
+            "count_physical": psutil.cpu_count(logical=False),
+            "count_logical": psutil.cpu_count(logical=True),
+        },
+        "memory": {
+            "total_mb": round(mem.total / 1024 / 1024),
+            "used_mb": round(mem.used / 1024 / 1024),
+            "percent": mem.percent,
+        },
+        "gpu": gpu_info,
+    }
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok"}
@@ -132,6 +200,7 @@ async def info():
         "auth": "enabled" if API_KEY else "disabled",
         "endpoints": {
             "/v2/synthesize": "合成语音 (multipart: audio + text)",
+            "/status": "系统状态 (GPU/CPU/内存负载)",
             "/health": "健康检查 (无需鉴权)",
         },
     }

@@ -14,7 +14,7 @@ RUN python3 -m pip install --upgrade pip
 WORKDIR /app
 COPY . /app
 
-RUN pip install . fastapi uvicorn python-multipart soundfile "huggingface_hub[cli,hf_xet]"
+RUN pip install . fastapi uvicorn python-multipart soundfile psutil nvidia-ml-py "huggingface_hub[cli,hf_xet]"
 
 # ===== 下载 IndexTTS2 主模型 =====
 RUN huggingface-cli download IndexTeam/IndexTTS-2 --local-dir /app/checkpoints
