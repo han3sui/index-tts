@@ -150,7 +150,7 @@ async def status():
     gpu_info = None
     if torch.cuda.is_available():
         dev = torch.cuda.current_device()
-        total = torch.cuda.get_device_properties(dev).total_mem
+        total = torch.cuda.get_device_properties(dev).total_memory
         allocated = torch.cuda.memory_allocated(dev)
         reserved = torch.cuda.memory_reserved(dev)
 
